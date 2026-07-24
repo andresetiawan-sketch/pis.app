@@ -1,0 +1,20 @@
+RewriteEngine On
+RewriteBase /
+
+# Route semua /api/* ke api.php
+RewriteRule ^api/?$ api.php [L]
+RewriteRule ^api/(.+)$ api.php [L]
+
+# Route semua /files/* (file upload karyawan, foto, dokumen) ke api.php
+RewriteRule ^files/(.+)$ api.php [L]
+
+# Route /branding/* (favicon dinamis) ke api.php
+# BUGFIX: sebelumnya tidak ada, jadi /branding/favicon jatuh ke SPA fallback di bawah
+# dan mengembalikan index.html, bukan gambar favicon.
+RewriteRule ^branding/(.+)$ api.php [L]
+
+# SPA fallback — semua request lain ke index.html
+RewriteRule ^index\.html$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.html [L]

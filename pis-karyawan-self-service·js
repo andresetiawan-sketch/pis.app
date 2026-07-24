@@ -1,0 +1,253 @@
+/**
+ * PIS — Portal Karyawan: "Slip Gaji & Rapel Saya".
+ *
+ * KENAPA FITUR INI ADA:
+ * Data Query, Rapel, dan Slip Gaji (pis-data-query.js, pis-payroll-rapel.js,
+ * pis-payslip-pdf.js) sudah saling terhubung lewat NIK (employee_no /
+ * nik_karyawan) — tapi ketiganya cuma bisa DIAKSES oleh Master Admin/Admin.
+ * Karyawan biasa yang login dengan akunnya sendiri belum punya cara untuk
+ * melihat/cetak slip gaji atau riwayat rapel MILIKNYA SENDIRI.
+ *
+ * File ini menambah tombol mengambang "💰 Slip Gaji & Rapel Saya" yang HANYA
+ * tampil untuk karyawan biasa (bukan Master Admin/Admin — mereka sudah
+ * punya akses penuh lewat menu Data Query & Rapel). Saat dibuka, panel ini
+ * otomatis memfilter data berdasarkan NIK akun yang sedang login (dari
+ * localStorage "pis_employee"), jadi setiap karyawan hanya melihat datanya
+ * sendiri — tanpa perlu memilih/mengetik NIK apa pun.
+ *
+ * Tombol "🖨️" cetak slip gaji memakai ULANG generator PDF yang sama persis
+ * dengan yang dipakai admin (window.__pisPrintPayslip, diekspos oleh
+ * pis-payslip-pdf.js), supaya hasil cetaknya identik dan tidak ada logika
+ * ganda. Karena itu, file ini HARUS dimuat setelah pis-payslip-pdf.js &
+ * pis-payroll-rapel.js di index.html.
+ *
+ * Sama seperti file pis-*.js lain: lapisan tambahan di atas DOM/API yang
+ * sudah ada, tidak mengubah bundle React ataupun file lain.
+ *
+ * CATATAN AKSES DATA: panel ini membaca /api/apps/entities/DataQuery dan
+ * /api/apps/entities/PayrollRapel lalu MENYARING hasilnya di sisi klien
+ * berdasarkan NIK milik sendiri (pola yang sama seperti filter Area Tugas
+ * di file-file lain) — read-only, tidak ada tombol tambah/ubah/hapus di
+ * sini sama sekali.
+ */
+(function () {
+  "use strict";
+
+  const ADMIN_ROLES = ["Master Admin", "master_admin", "Admin", "admin"];
+
+  function getEmployee() {
+    try {
+      const s = localStorage.getItem("pis_employee") || sessionStorage.getItem("pis_employee");
+      return s ? JSON.parse(s) : null;
+    } catch { return null; }
+  }
+  function getToken() {
+    try { return localStorage.getItem("token") || sessionStorage.getItem("token"); } catch { return null; }
+  }
+  function ownNik() {
+    const e = getEmployee();
+    if (!e) return "";
+    // Nama field NIK pada objek sesi login bisa berbeda-beda tergantung
+    // versi login yang dipakai — coba beberapa kemungkinan yang konsisten
+    // dengan field yang sudah dipakai di file pis-*.js lain (nik_karyawan
+    // pada Employee, employee_no pada Data Query).
+    return String(e.nik_karyawan || e.employee_no || e.nik || "").trim();
+  }
+  function isRegularEmployee() {
+    const e = getEmployee();
+    if (!e) return false;
+    const role = String(e.role || e.jabatan || "").trim();
+    if (!role) return false;
+    return !ADMIN_ROLES.includes(role);
+  }
+  async function apiGet(path) {
+    const token = getToken();
+    try {
+      const res = await fetch(path, { headers: token ? { "X-Employee-Token": token } : {} });
+      const data = await res.json().catch(() => null);
+      return { ok: res.ok, data };
+    } catch (e) { return { ok: false, data: { error: String(e) } }; }
+  }
+  const ENT = (p) => `/api/apps/entities/${p}`;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function fmtRp(v) { return "Rp " + Math.round(Math.abs(Number(v) || 0)).toLocaleString("id-ID"); }
+  function fmtBulan(p) {
+    if (!p) return "-";
+    const BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+    const m = String(p).match(/^(\d{4})-(\d{2})$/);
+    return m ? (BULAN[parseInt(m[2], 10) - 1] || m[2]) + " " + m[1] : p;
+  }
+  function toast(msg, kind) {
+    const el = document.createElement("div");
+    el.className = "pisss-toast " + (kind || "ok");
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 5000);
+  }
+  function samaNik(a) {
+    const own = ownNik();
+    if (!own) return false;
+    return String(a || "").trim().toLowerCase() === own.toLowerCase();
+  }
+
+  // ============================================================
+  // Styles
+  // ============================================================
+  const style = document.createElement("style");
+  style.textContent = `
+    .pisss-toast{position:fixed;top:16px;right:16px;z-index:100002;padding:12px 16px;border-radius:10px;font:600 13px system-ui,sans-serif;box-shadow:0 6px 18px rgba(0,0,0,.25);max-width:320px;}
+    .pisss-toast.ok{background:#1a7b2c;color:#fff;} .pisss-toast.fail{background:#7b1a1a;color:#fff;}
+    .pisss-fab{position:fixed;left:20px;bottom:20px;z-index:9996;display:none;background:#7B1A2C;color:#fff;border:none;
+      border-radius:999px;padding:12px 18px;font:700 12.5px system-ui,sans-serif;box-shadow:0 6px 16px rgba(0,0,0,.28);cursor:pointer;}
+    .pisss-fab.show{display:block;}
+    .pisss-ov{position:fixed;inset:0;background:#f3f4f6;z-index:99970;display:none;flex-direction:column;font:400 13.5px system-ui,sans-serif;color:#1f2937;}
+    .pisss-ov.show{display:flex;}
+    .pisss-hdr{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+    .pisss-hdr h1{font-size:17px;font-weight:800;color:#7B1A2C;margin:0;}
+    .pisss-hdr .pisss-sub{font-size:12px;color:#6b7280;margin:2px 0 0;}
+    .pisss-hdr-title{margin-right:auto;}
+    .pisss-btn-close{font:700 12.5px system-ui,sans-serif;border-radius:9px;padding:9px 14px;cursor:pointer;border:1px solid #fecaca;background:#fff;color:#b91c1c;}
+    .pisss-tabs{display:flex;gap:6px;padding:0 20px;background:#fff;border-bottom:1px solid #f0f0f0;}
+    .pisss-tab{padding:12px 14px;cursor:pointer;font-weight:700;color:#999;border-bottom:3px solid transparent;font-size:13px;}
+    .pisss-tab.active{color:#7B1A2C;border-color:#7B1A2C;}
+    .pisss-body{flex:1;overflow:auto;padding:16px 20px;}
+    .pisss-pane{display:none;}
+    .pisss-pane.active{display:block;}
+    .pisss-tbl-wrap{background:#fff;border-radius:12px;border:1px solid #eee;overflow:auto;}
+    table.pisss-tbl{border-collapse:collapse;width:100%;font-size:12.5px;}
+    table.pisss-tbl th,table.pisss-tbl td{padding:9px 12px;border-bottom:1px solid #f0f0f0;text-align:left;white-space:nowrap;}
+    table.pisss-tbl th{background:#faf7f7;color:#7B1A2C;font-weight:700;position:sticky;top:0;}
+    table.pisss-tbl tbody tr:hover{background:#fdf6f7;}
+    .pisss-badge{font:700 10.5px system-ui,sans-serif;border-radius:999px;padding:3px 9px;display:inline-block;white-space:nowrap;}
+    .pisss-badge.diajukan{background:#fef3c7;color:#92400e;}
+    .pisss-badge.disetujui{background:#dbeafe;color:#1d4ed8;}
+    .pisss-badge.dibayarkan{background:#dcfce7;color:#166534;}
+    .pisss-badge.plus{background:#dcfce7;color:#166534;} .pisss-badge.minus{background:#fee2e2;color:#991b1b;}
+    .pisss-empty{padding:40px;text-align:center;color:#9ca3af;font-size:13px;}
+    .pisss-print-btn{border:none;background:none;cursor:pointer;font-size:15px;padding:3px 6px;border-radius:6px;color:#7B1A2C;}
+    .pisss-print-btn:hover{background:#f3f4f6;}
+  `;
+  document.head.appendChild(style);
+
+  // ============================================================
+  // Overlay
+  // ============================================================
+  const overlay = document.createElement("div");
+  overlay.className = "pisss-ov";
+  overlay.innerHTML = `
+    <div class="pisss-hdr">
+      <div class="pisss-hdr-title">
+        <h1>💰 Slip Gaji &amp; Rapel Saya</h1>
+        <p class="pisss-sub">Data pribadi Anda — otomatis terhubung lewat NIK, hanya Anda yang bisa melihatnya.</p>
+      </div>
+      <button class="pisss-btn-close" id="pisss-close">✕ Tutup</button>
+    </div>
+    <div class="pisss-tabs">
+      <div class="pisss-tab active" data-tab="slip">🧾 Slip Gaji Saya</div>
+      <div class="pisss-tab" data-tab="rapel">📑 Rapel Saya</div>
+    </div>
+    <div class="pisss-body">
+      <div class="pisss-pane active" data-pane="slip"><div class="pisss-tbl-wrap" id="pisss-slip-wrap"><div class="pisss-empty">Memuat...</div></div></div>
+      <div class="pisss-pane" data-pane="rapel"><div class="pisss-tbl-wrap" id="pisss-rapel-wrap"><div class="pisss-empty">Memuat...</div></div></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector("#pisss-close").addEventListener("click", () => overlay.classList.remove("show"));
+  overlay.querySelectorAll(".pisss-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      overlay.querySelectorAll(".pisss-tab").forEach((t) => t.classList.remove("active"));
+      overlay.querySelectorAll(".pisss-pane").forEach((p) => p.classList.remove("active"));
+      tab.classList.add("active");
+      overlay.querySelector(`.pisss-pane[data-pane="${tab.dataset.tab}"]`).classList.add("active");
+    });
+  });
+
+  async function refreshSlip() {
+    const wrap = overlay.querySelector("#pisss-slip-wrap");
+    wrap.innerHTML = `<div class="pisss-empty">Memuat...</div>`;
+    const r = await apiGet(ENT("DataQuery?limit=100000&sort=-created_date"));
+    if (!r.ok || !Array.isArray(r.data)) { wrap.innerHTML = `<div class="pisss-empty">Gagal memuat data slip gaji.</div>`; return; }
+    const mine = r.data.filter((row) => samaNik(row.employee_no));
+    if (!mine.length) { wrap.innerHTML = `<div class="pisss-empty">Belum ada slip gaji atas nama Anda.</div>`; return; }
+    wrap.innerHTML = `<table class="pisss-tbl">
+      <thead><tr><th>Periode</th><th>Nama</th><th>Posisi</th><th>Gaji Pokok</th><th>Total Tunjangan</th><th></th></tr></thead>
+      <tbody>${mine.map((row) => `
+        <tr>
+          <td>${esc(fmtBulan(row.periode))}</td>
+          <td>${esc(row.name || "-")}</td>
+          <td>${esc(row.position || "-")}</td>
+          <td>${fmtRp(row.basic_salary)}</td>
+          <td>${fmtRp(row.total_allowance)}</td>
+          <td><button class="pisss-print-btn" data-print="${row.id}" title="Cetak Slip Gaji (PDF)">🖨️</button></td>
+        </tr>`).join("")}</tbody>
+    </table>`;
+    wrap.querySelectorAll("[data-print]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (typeof window.__pisPrintPayslip === "function") {
+          window.__pisPrintPayslip(btn.dataset.print);
+        } else {
+          toast("Alat cetak slip gaji belum termuat, coba muat ulang halaman.", "fail");
+        }
+      });
+    });
+  }
+
+  async function refreshRapel() {
+    const wrap = overlay.querySelector("#pisss-rapel-wrap");
+    wrap.innerHTML = `<div class="pisss-empty">Memuat...</div>`;
+    const r = await apiGet(ENT("PayrollRapel?limit=100000&sort=-created_date"));
+    if (!r.ok || !Array.isArray(r.data)) { wrap.innerHTML = `<div class="pisss-empty">Gagal memuat data rapel.</div>`; return; }
+    const mine = r.data.filter((row) => samaNik(row.nik_karyawan));
+    if (!mine.length) { wrap.innerHTML = `<div class="pisss-empty">Belum ada riwayat rapel atas nama Anda.</div>`; return; }
+    wrap.innerHTML = `<table class="pisss-tbl">
+      <thead><tr><th>Periode Rapel</th><th>Jenis</th><th>Nominal Selisih</th><th>Status</th><th>Dibayarkan Pada</th><th>Keterangan</th></tr></thead>
+      <tbody>${mine.map((row) => {
+        const nilai = Number(row.nominal_selisih) || 0;
+        const cls = nilai < 0 ? "minus" : "plus";
+        const statusCls = String(row.status || "").trim().toLowerCase();
+        return `<tr>
+          <td>${esc(fmtBulan(row.periode_rapel))}</td>
+          <td>${esc(row.jenis_selisih || "-")}</td>
+          <td><span class="pisss-badge ${cls}">${nilai < 0 ? "-" : "+"}${fmtRp(nilai)}</span></td>
+          <td><span class="pisss-badge ${statusCls}">${esc(row.status || "-")}</span></td>
+          <td>${esc(fmtBulan(row.dibayarkan_pada_periode))}</td>
+          <td>${esc(row.keterangan || "-")}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>`;
+  }
+
+  function openOverlay() {
+    overlay.classList.add("show");
+    refreshSlip();
+    refreshRapel();
+  }
+
+  // ============================================================
+  // Tombol mengambang — hanya tampil untuk karyawan biasa (bukan Admin)
+  // yang NIK-nya berhasil terbaca dari sesi login.
+  // ============================================================
+  const fab = document.createElement("button");
+  fab.type = "button";
+  fab.className = "pisss-fab";
+  fab.textContent = "💰 Slip Gaji & Rapel Saya";
+  document.body.appendChild(fab);
+  fab.addEventListener("click", openOverlay);
+
+  function refreshFabVisibility() {
+    const shouldShow = isRegularEmployee() && !!ownNik();
+    fab.classList.toggle("show", shouldShow);
+  }
+  refreshFabVisibility();
+  window.addEventListener("storage", refreshFabVisibility);
+  window.addEventListener("popstate", refreshFabVisibility);
+  setInterval(refreshFabVisibility, 1500); // ikut perubahan navigasi SPA (pushState)
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay.classList.contains("show")) overlay.classList.remove("show");
+  });
+})();

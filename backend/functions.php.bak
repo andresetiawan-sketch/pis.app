@@ -1,0 +1,466 @@
+<?php
+if (!defined('PIS_APP')) { http_response_code(403); exit('Forbidden'); }
+require_once __DIR__ . '/entities.php';
+require_once __DIR__ . '/auth.php';
+
+// ── employeeLogin — login pakai NIK + password terhadap entity Employee ──
+function fn_employee_login(array $body): array {
+    $nik = $body['nik'] ?? null;
+    $password = $body['password'] ?? null;
+    if (!$nik || !$password) return ['success' => false, 'error' => 'NIK dan password wajib diisi'];
+
+    if (is_login_locked($nik)) {
+        $min = (int) round(LOGIN_LOCK_SECONDS / 60);
+        return ['success' => false, 'error' => "Terlalu banyak percobaan gagal. Coba lagi dalam $min menit."];
+    }
+
+    $emp = find_employee_by_nik($nik);
+    if (!$emp) { register_login_failure($nik); return ['success' => false, 'error' => 'NIK tidak ditemukan']; }
+    if ((string)($emp['password'] ?? '') !== (string)$password) {
+        register_login_failure($nik);
+        return ['success' => false, 'error' => 'Password salah'];
+    }
+    if (!empty($emp['status_aktif']) && $emp['status_aktif'] !== 'Aktif') {
+        return ['success' => false, 'error' => 'Akun tidak aktif'];
+    }
+
+    clear_login_failure($nik);
+    $token = create_session([
+        'sub' => $emp['id'], 'nik' => $emp['nik_karyawan'], 'role' => $emp['role'] ?? 'Staff',
+        'nama' => $emp['nama_lengkap'] ?? '', 'area_tugas' => $emp['area_tugas'] ?? '', 'jabatan' => $emp['jabatan'] ?? '',
+    ]);
+    unset($emp['password']);
+    return ['success' => true, 'employee' => $emp, 'token' => $token];
+}
+
+function fn_employee_logout(array $body): array {
+    if (!empty($body['token'])) revoke_session($body['token']);
+    return ['success' => true];
+}
+
+function fn_employee_reset_password(array $body): array {
+    $nik = $body['nik'] ?? null;
+    $newPassword = $body['newPassword'] ?? null;
+    if (!$nik || !$newPassword) return ['success' => false, 'error' => 'NIK dan password baru wajib diisi'];
+    $emp = find_employee_by_nik($nik);
+    if (!$emp) return ['success' => false, 'error' => 'NIK tidak ditemukan'];
+    update_entity('Employee', $emp['id'], ['password' => $newPassword]);
+    return ['success' => true, 'message' => 'Password berhasil diubah'];
+}
+
+function fn_get_employee_by_nik(array $body): array {
+    $nik = $body['nik'] ?? null;
+    if (!$nik) return ['success' => false, 'error' => 'NIK wajib diisi'];
+    $emp = find_employee_by_nik($nik);
+    if (!$emp) return ['success' => false, 'error' => 'NIK tidak ditemukan'];
+    unset($emp['password']);
+    return ['success' => true, 'employee' => $emp];
+}
+
+// ── createMasterAdmin — hanya Master Admin yang boleh menambah Master Admin lain ──
+function fn_create_master_admin(array $body, ?array $auth): array {
+    if (!is_master_admin($auth)) return ['success' => false, 'error' => 'Hanya Master Admin yang bisa menambah Master Admin baru'];
+    $nik = $body['nik_karyawan'] ?? null;
+    $nama = $body['nama_lengkap'] ?? null;
+    $password = $body['password'] ?? null;
+    if (!$nik || !$nama || !$password) return ['success' => false, 'error' => 'nik_karyawan, nama_lengkap, dan password wajib diisi'];
+    if (!check_nik_unique((string)$nik)) return ['success' => false, 'error' => "NIK \"$nik\" sudah terdaftar"];
+
+    $empData = [
+        'nik_karyawan' => $nik, 'nama_lengkap' => $nama, 'password' => $password,
+        'role' => 'Master Admin', 'jabatan' => $body['jabatan'] ?? 'Administrator',
+        'area_tugas' => $body['area_tugas'] ?? 'Head Office', 'email' => $body['email'] ?? '',
+        'status_aktif' => 'Aktif', 'dibuat_oleh_admin' => $auth['nik'] ?? '',
+    ];
+    $newEmp = create_entity('Employee', $empData, $auth['nik'] ?? null);
+    unset($newEmp['password']);
+    return ['success' => true, 'employee' => $newEmp, 'message' => 'Master Admin berhasil dibuat'];
+}
+
+// ── Menu admin per role (setAdminMenu/getAdminMenu) ──
+function get_setting(string $key): string {
+    $stmt = db()->prepare('SELECT setting_value FROM settings WHERE setting_key = ? LIMIT 1');
+    $stmt->execute([$key]);
+    $row = $stmt->fetch();
+    return $row ? (string)$row['setting_value'] : '';
+}
+function set_setting(string $key, string $value): void {
+    $stmt = db()->prepare('INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)');
+    $stmt->execute([$key, $value]);
+}
+
+function fn_set_admin_menu(array $body, ?array $auth): array {
+    if (!is_master_admin($auth)) return ['success' => false, 'error' => 'Hanya Master Admin yang bisa mengatur menu'];
+    $role = $body['role'] ?? null;
+    $menu = $body['menu'] ?? [];
+    if (!$role) return ['success' => false, 'error' => 'role wajib diisi'];
+    set_setting("menu_config:$role", json_encode($menu));
+    return ['success' => true];
+}
+function fn_get_admin_menu(array $body): array {
+    $role = $body['role'] ?? 'Staff';
+    $raw = get_setting("menu_config:$role");
+    return ['success' => true, 'menu' => $raw ? json_decode($raw, true) : []];
+}
+
+// ── Aturan notifikasi (setNotificationRules/getNotificationRules) ──
+function fn_set_notification_rules(array $body, ?array $auth): array {
+    if (!is_admin($auth)) return ['success' => false, 'error' => 'Hanya Admin/Master Admin yang bisa mengatur notifikasi'];
+    set_setting('notification_rules', json_encode($body['rules'] ?? []));
+    return ['success' => true];
+}
+function fn_get_notification_rules(): array {
+    $raw = get_setting('notification_rules');
+    return ['success' => true, 'rules' => $raw ? json_decode($raw, true) : []];
+}
+function fn_get_notification_sounds(): array {
+    $raw = get_setting('notification_sounds');
+    return ['success' => true, 'sounds' => $raw ? json_decode($raw, true) : []];
+}
+function fn_set_notification_sounds(array $body, ?array $auth): array {
+    if (!is_admin($auth)) return ['success' => false, 'error' => 'Hanya Admin/Master Admin yang bisa mengatur bunyi notifikasi'];
+    set_setting('notification_sounds', json_encode($body['sounds'] ?? []));
+    return ['success' => true];
+}
+
+// ── Notifikasi personal (SystemNotification entity) ──
+function fn_get_my_notifications(array $body, ?array $auth): array {
+    if (!$auth) return ['success' => false, 'error' => 'Sesi login tidak valid'];
+    $list = list_entity('SystemNotification', ['nik_tujuan' => $auth['nik'], 'sort' => '-created_date', 'limit' => 100]);
+    return ['success' => true, 'notifications' => $list];
+}
+function fn_mark_notification_read(array $body): array {
+    $id = $body['id'] ?? null;
+    if (!$id) return ['success' => false, 'error' => 'id wajib diisi'];
+    update_entity('SystemNotification', $id, ['sudah_dibaca' => true]);
+    return ['success' => true];
+}
+
+// ── Hak akses Area/Proyek (setAreaAccessRule/getAreaAccessRule) ──
+function fn_set_area_access_rule(array $body, ?array $auth): array {
+    if (!is_master_admin($auth)) return ['success' => false, 'error' => 'Hanya Master Admin yang bisa mengatur hak akses ini'];
+    set_setting('area_access_rule', json_encode($body['rule'] ?? []));
+    return ['success' => true];
+}
+function fn_get_area_access_rule(): array {
+    $raw = get_setting('area_access_rule');
+    return ['success' => true, 'rule' => $raw ? json_decode($raw, true) : []];
+}
+function fn_set_employee_area_access_rule(array $body, ?array $auth): array {
+    if (!is_master_admin($auth)) return ['success' => false, 'error' => 'Hanya Master Admin yang bisa mengatur ini'];
+    set_setting('employee_area_access_rule', json_encode($body['rule'] ?? []));
+    return ['success' => true];
+}
+function fn_get_employee_area_access_rule(): array {
+    $raw = get_setting('employee_area_access_rule');
+    return ['success' => true, 'rule' => $raw ? json_decode($raw, true) : []];
+}
+
+// ── E-Patrol dasar (start/scan/complete) — CRUD sederhana di atas entity EPatrol ──
+function fn_start_patrol(array $body, ?array $auth): array {
+    if (!$auth) return ['success' => false, 'error' => 'Sesi login tidak valid'];
+    $rec = create_entity('EPatrol', array_merge($body, [
+        'nik_petugas' => $auth['nik'], 'status' => 'Berlangsung', 'waktu_mulai' => date('Y-m-d H:i:s'),
+    ]), $auth['nik']);
+    return ['success' => true, 'patrol' => $rec];
+}
+function fn_scan_patrol_point(array $body, ?array $auth): array {
+    $id = $body['patrol_id'] ?? null;
+    if (!$id) return ['success' => false, 'error' => 'patrol_id wajib diisi'];
+    $existing = get_entity('EPatrol', $id);
+    if (!$existing) return ['success' => false, 'error' => 'Data patroli tidak ditemukan'];
+    $titik = $existing['titik_discan'] ?? [];
+    $titik[] = ['point' => $body['point'] ?? '', 'waktu' => date('Y-m-d H:i:s')];
+    $rec = update_entity('EPatrol', $id, ['titik_discan' => $titik]);
+    return ['success' => true, 'patrol' => $rec];
+}
+function fn_complete_patrol(array $body): array {
+    $id = $body['patrol_id'] ?? null;
+    if (!$id) return ['success' => false, 'error' => 'patrol_id wajib diisi'];
+    $rec = update_entity('EPatrol', $id, ['status' => 'Selesai', 'waktu_selesai' => date('Y-m-d H:i:s')]);
+    if (!$rec) return ['success' => false, 'error' => 'Data patroli tidak ditemukan'];
+    return ['success' => true, 'patrol' => $rec];
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SHIFT MATRIX — Jadwal Shift Visual
+// ══════════════════════════════════════════════════════════════════
+function fn_get_shift_matrix(array $body, ?array $auth): array {
+    $areaId = trim((string)($body['area_tugas'] ?? ''));
+    $month = (int)($body['month'] ?? (int)date('n'));
+    $year = (int)($body['year'] ?? (int)date('Y'));
+
+    if (!$areaId) return ['success' => false, 'error' => 'area_tugas wajib diisi'];
+
+    $employees = list_entity('Employee', ['area_tugas' => $areaId, 'status_aktif' => 'Aktif', 'limit' => 5000]);
+    if (!count($employees)) return ['success' => false, 'error' => 'Tidak ada karyawan di area ini'];
+
+    $regus = list_entity('Regu', ['area_tugas' => $areaId, 'limit' => 100]);
+    $reguConfig = [];
+    foreach ($regus as $r) {
+        $nama = $r['nama_regu'] ?? '';
+        if ($nama) $reguConfig[$nama] = $r;
+    }
+
+    $schedules = list_entity('ShiftSchedule', ['area_tugas' => $areaId, 'limit' => 5000]);
+    $scheduleMap = [];
+    foreach ($schedules as $s) {
+        $tgl = $s['tanggal'] ?? '';
+        if (!str_starts_with($tgl, sprintf('%04d-%02d', $year, $month))) continue;
+        $regu = $s['regu'] ?? '';
+        foreach (($s['karyawan_ids'] ?? []) as $nik) {
+            $nik = (string)$nik;
+            if (!isset($scheduleMap[$nik])) $scheduleMap[$nik] = [];
+            $scheduleMap[$nik][$tgl] = [
+                'regu' => $regu,
+                'jam_mulai' => $s['jam_mulai'] ?? '',
+                'jam_selesai' => $s['jam_selesai'] ?? '',
+                'tipe_shift' => $s['tipe_shift'] ?? '',
+            ];
+        }
+    }
+
+    $byRegu = [];
+    foreach ($employees as $emp) {
+        $regu = $emp['regu'] ?? 'Non Regu';
+        if (!isset($byRegu[$regu])) $byRegu[$regu] = [];
+        $byRegu[$regu][] = $emp;
+    }
+
+    $daysInMonth = cal_days_in_month(CAL_GREGORIAN, $month, $year);
+    $reguOrder = ['Regu A', 'Regu B', 'Regu C', 'Regu D', 'Non Regu', 'Non Shift'];
+
+    $matrix = [];
+    foreach ($reguOrder as $regu) {
+        if (!isset($byRegu[$regu])) continue;
+        $cfg = $reguConfig[$regu] ?? null;
+        $durasiJam = $cfg ? (int)($cfg['durasi_shift_jam'] ?? 12) : 12;
+        $polaRotasi = $cfg ? ($cfg['pola_rotasi'] ?? 'ABC') : 'ABC';
+        $isNonRegu = in_array($regu, ['Non Regu', 'Non Shift'], true);
+        $ikatanJam = !$isNonRegu;
+
+        foreach ($byRegu[$regu] as $emp) {
+            $nik = $emp['nik_karyawan'] ?? '';
+            $row = [
+                'nik' => $nik, 'nama' => $emp['nama_lengkap'] ?? '', 'regu' => $regu,
+                'regu_label' => $regu, 'jam_kerja' => $durasiJam, 'ikatan_jam' => $ikatanJam, 'days' => [],
+            ];
+            for ($day = 1; $day <= $daysInMonth; $day++) {
+                $date = sprintf('%04d-%02d-%02d', $year, $month, $day);
+                $dayOfWeek = (int)date('N', strtotime($date));
+                if (isset($scheduleMap[$nik][$date])) {
+                    $sch = $scheduleMap[$nik][$date];
+                    $row['days'][$day] = ['status' => 'KERJA', 'label' => substr($regu, 0, 1), 'jam_mulai' => $sch['jam_mulai'], 'jam_selesai' => $sch['jam_selesai']];
+                    continue;
+                }
+                if ($isNonRegu) {
+                    if ($dayOfWeek >= 6) { $row['days'][$day] = ['status' => 'OFF', 'label' => 'L']; }
+                    else { $row['days'][$day] = ['status' => 'KERJA', 'label' => 'N', 'jam_mulai' => '08:00', 'jam_selesai' => '17:00']; }
+                    continue;
+                }
+                $reguLetters = array_values(array_filter(str_split(strtoupper($polaRotasi)), fn($c) => preg_match('/[A-Z]/', $c)));
+                if (!count($reguLetters)) $reguLetters = ['A', 'B', 'C'];
+                $myLetter = substr($regu, -1);
+                $cycleDay = ($day - 1) % count($reguLetters);
+                $activeLetter = $reguLetters[$cycleDay];
+                if ($myLetter === $activeLetter) {
+                    $shiftIndex = (int)floor(($day - 1) / count($reguLetters)) % 2;
+                    if ($durasiJam == 12) {
+                        $jamMulai = $shiftIndex == 0 ? '06:00' : '18:00';
+                        $jamSelesai = $shiftIndex == 0 ? '18:00' : '06:00';
+                    } else {
+                        $shifts = [['07:00', '15:00'], ['15:00', '23:00'], ['23:00', '07:00']];
+                        $si = $cycleDay % count($shifts);
+                        $jamMulai = $shifts[$si][0]; $jamSelesai = $shifts[$si][1];
+                    }
+                    $row['days'][$day] = ['status' => 'KERJA', 'label' => $myLetter, 'jam_mulai' => $jamMulai, 'jam_selesai' => $jamSelesai];
+                } else {
+                    $row['days'][$day] = ['status' => 'OFF', 'label' => '-'];
+                }
+            }
+            $matrix[] = $row;
+        }
+    }
+    return ['success' => true, 'area_tugas' => $areaId, 'month' => $month, 'year' => $year, 'days_in_month' => $daysInMonth, 'matrix' => $matrix];
+}
+
+// ══════════════════════════════════════════════════════════════════
+// GENERATE JADWAL BULANAN OTOMATIS
+// ══════════════════════════════════════════════════════════════════
+function fn_generate_jadwal_bulanan_otomatis(array $body, ?array $auth): array {
+    if (!is_master_admin($auth)) return ['success' => false, 'error' => 'Hanya Master Admin yang bisa generate jadwal'];
+
+    $areaId = trim((string)($body['area_tugas'] ?? ''));
+    $month = (int)($body['month'] ?? (int)date('n'));
+    $year = (int)($body['year'] ?? (int)date('Y'));
+    $reguList = $body['regu_list'] ?? [];
+    $generateAll = (bool)($body['generate_all_regu'] ?? true);
+    $polaRotasiInput = trim((string)($body['pola_rotasi'] ?? 'ABC'));
+
+    if (!$areaId) return ['success' => false, 'error' => 'area_tugas wajib diisi'];
+
+    $employees = list_entity('Employee', ['area_tugas' => $areaId, 'status_aktif' => 'Aktif', 'limit' => 5000]);
+    if (!count($employees)) return ['success' => false, 'error' => 'Tidak ada karyawan'];
+
+    $regus = list_entity('Regu', ['area_tugas' => $areaId, 'limit' => 100]);
+    $reguConfig = [];
+    foreach ($regus as $r) { $reguConfig[$r['nama_regu'] ?? ''] = $r; }
+
+    $byRegu = [];
+    foreach ($employees as $emp) {
+        $regu = $emp['regu'] ?? 'Non Regu';
+        if (!$generateAll && is_array($reguList) && count($reguList) && !in_array($regu, $reguList)) continue;
+        if (!isset($byRegu[$regu])) $byRegu[$regu] = [];
+        $byRegu[$regu][] = $emp['nik_karyawan'];
+    }
+
+    if (!count($byRegu)) return ['success' => false, 'error' => 'Tidak ada karyawan yang sesuai filter'];
+
+    $daysInMonth = cal_days_in_month(CAL_GREGORIAN, $month, $year);
+    $created = 0; $skipped = 0;
+
+    foreach ($byRegu as $regu => $niks) {
+        if (!count($niks)) continue;
+        $cfg = $reguConfig[$regu] ?? null;
+        $durasiJam = $cfg ? (int)($cfg['durasi_shift_jam'] ?? 12) : 12;
+        $polaRotasi = $cfg ? ($cfg['pola_rotasi'] ?? $polaRotasiInput) : $polaRotasiInput;
+        $isNonRegu = in_array($regu, ['Non Regu', 'Non Shift'], true);
+
+        for ($day = 1; $day <= $daysInMonth; $day++) {
+            $date = sprintf('%04d-%02d-%02d', $year, $month, $day);
+            $dayOfWeek = (int)date('N', strtotime($date));
+            if ($isNonRegu && $dayOfWeek >= 6) continue;
+
+            $jamMulai = '08:00'; $jamSelesai = '17:00'; $tipe = 'Non Shift (Pagi)';
+
+            if (!$isNonRegu) {
+                $reguLetters = array_values(array_filter(str_split(strtoupper($polaRotasi)), fn($c) => preg_match('/[A-Z]/', $c)));
+                if (!count($reguLetters)) $reguLetters = ['A', 'B', 'C'];
+                $myLetter = substr($regu, -1);
+                $cycleDay = ($day - 1) % count($reguLetters);
+                if ($myLetter !== $reguLetters[$cycleDay]) continue;
+                $shiftIndex = (int)floor(($day - 1) / count($reguLetters)) % 2;
+                if ($durasiJam == 12) {
+                    $jamMulai = $shiftIndex == 0 ? '06:00' : '18:00';
+                    $jamSelesai = $shiftIndex == 0 ? '18:00' : '06:00';
+                    $tipe = $shiftIndex == 0 ? '12 jam (Pagi)' : '12 jam (Malam)';
+                } else {
+                    $shifts = [['07:00', '15:00'], ['15:00', '23:00'], ['23:00', '07:00']];
+                    $si = $cycleDay % count($shifts);
+                    $jamMulai = $shifts[$si][0]; $jamSelesai = $shifts[$si][1];
+                    $tipe = "8 jam (Shift " . ($si + 1) . ")";
+                }
+            }
+
+            $existing = list_entity('ShiftSchedule', ['area_tugas' => $areaId, 'regu' => $regu, 'tanggal' => $date, 'limit' => 1]);
+            if (count($existing)) { $skipped++; continue; }
+
+            create_entity('ShiftSchedule', [
+                'area_tugas' => $areaId, 'regu' => $regu, 'tanggal' => $date,
+                'jam_mulai' => $jamMulai, 'jam_selesai' => $jamSelesai, 'tipe_shift' => $tipe,
+                'karyawan_ids' => $niks, 'catatan' => 'Generated otomatis — Rotasi ' . $polaRotasi,
+            ], 'system-cron');
+            $created++;
+        }
+    }
+    return ['success' => true, 'area_tugas' => $areaId, 'month' => $month, 'year' => $year, 'created' => $created, 'skipped' => $skipped];
+}
+
+/**
+ * Fungsi kompleks yang BELUM diport (butuh library tambahan / logika bisnis
+ * panjang: generate dokumen .docx, hitung payroll, xlsx import/export, dsb).
+ * Supaya frontend tidak error keras (500), semua nama ini tetap terdaftar
+ * dan mengembalikan pesan yang jelas. Cari nama fungsi yang sama persis di
+ * worker.js (App asli) untuk melihat logikanya, lalu port satu-per-satu ke
+ * PHP di sini. Lihat PANDUAN_DEPLOY.md bagian "Roadmap Porting Lanjutan".
+ */
+function fn_not_yet_ported(string $name): array {
+    return [
+        'success' => false,
+        'error' => "Fungsi \"$name\" belum diport ke PHP. Lihat worker.js (kode asli) untuk logikanya, " .
+                   "dan PANDUAN_DEPLOY.md bagian Roadmap Porting Lanjutan.",
+    ];
+}
+
+/**
+ * Tabel dispatch /api/apps/functions/{name}.
+ * Format: 'namaFunction' => callback(body, auth)
+ */
+function functions_table(): array {
+    return [
+        'employeeLogin' => fn ($b, $a) => fn_employee_login($b),
+        'employeeLogout' => fn ($b, $a) => fn_employee_logout($b),
+        'employeeResetPassword' => fn ($b, $a) => fn_employee_reset_password($b),
+        'getEmployeeByNik' => fn ($b, $a) => fn_get_employee_by_nik($b),
+        'createMasterAdmin' => fn ($b, $a) => fn_create_master_admin($b, $a),
+        'setAdminMenu' => fn ($b, $a) => fn_set_admin_menu($b, $a),
+        'getAdminMenu' => fn ($b, $a) => fn_get_admin_menu($b),
+        'setNotificationRules' => fn ($b, $a) => fn_set_notification_rules($b, $a),
+        'getNotificationRules' => fn ($b, $a) => fn_get_notification_rules(),
+        'getNotificationSounds' => fn ($b, $a) => fn_get_notification_sounds(),
+        'setNotificationSounds' => fn ($b, $a) => fn_set_notification_sounds($b, $a),
+        'getMyNotifications' => fn ($b, $a) => fn_get_my_notifications($b, $a),
+        'markNotificationRead' => fn ($b, $a) => fn_mark_notification_read($b),
+        'setAreaAccessRule' => fn ($b, $a) => fn_set_area_access_rule($b, $a),
+        'getAreaAccessRule' => fn ($b, $a) => fn_get_area_access_rule(),
+        'setEmployeeAreaAccessRule' => fn ($b, $a) => fn_set_employee_area_access_rule($b, $a),
+        'getEmployeeAreaAccessRule' => fn ($b, $a) => fn_get_employee_area_access_rule(),
+        'startPatrol' => fn ($b, $a) => fn_start_patrol($b, $a),
+        'scanPatrolPoint' => fn ($b, $a) => fn_scan_patrol_point($b, $a),
+        'completePatrol' => fn ($b, $a) => fn_complete_patrol($b),
+
+        // ── PKWT & Surat Tugas (diporting — lihat backend/pkwt.php) ──
+        'generatePKWTAndAssignment' => fn ($b, $a) => fn_generate_pkwt_and_assignment($b, $a),
+        'searchEmployeesForPkwt' => fn ($b, $a) => fn_search_employees_for_pkwt($b),
+        'pkwtSalaryOptions' => fn ($b, $a) => fn_pkwt_salary_options($b),
+        'previewSalaryFromDataQuery' => fn ($b, $a) => fn_preview_salary_from_data_query($b),
+        'deletePkwtAndAssignment' => fn ($b, $a) => fn_delete_pkwt_and_assignment($b, $a),
+        'deleteAssignmentOnly' => fn ($b, $a) => fn_delete_assignment_only($b, $a),
+
+        // ── Chat internal + auto-reply "Acha" (lihat backend/chat.php) ──
+        'sendChat' => fn ($b, $a) => fn_send_chat($b, $a),
+        'getChats' => fn ($b, $a) => fn_get_chats($b, $a),
+        'getMyChat' => fn ($b, $a) => fn_get_my_chat($b, $a),
+        'getMyChatUnreadCount' => fn ($b, $a) => fn_get_my_chat_unread_count($b, $a),
+        'markChatRead' => fn ($b, $a) => fn_mark_chat_read($b, $a),
+        'getChatCount' => fn ($b, $a) => fn_get_chat_count(),
+
+        // ── Jadwal Shift (NEW) ──
+        'getShiftMatrix' => fn ($b, $a) => fn_get_shift_matrix($b, $a),
+        'generateJadwalBulananOtomatis' => fn ($b, $a) => fn_generate_jadwal_bulanan_otomatis($b, $a),
+
+        // ── Belum diport — lihat catatan fn_not_yet_ported() di atas ──
+        'fixApplicantBranches' => fn ($b, $a) => fn_not_yet_ported('fixApplicantBranches'),
+        'syncDataQueryWithEmployees' => fn ($b, $a) => fn_not_yet_ported('syncDataQueryWithEmployees'),
+        'approveShiftSwap' => fn ($b, $a) => fn_not_yet_ported('approveShiftSwap'),
+        'cancelShiftSwap' => fn ($b, $a) => fn_not_yet_ported('cancelShiftSwap'),
+        'notifyBulkShift' => fn ($b, $a) => fn_not_yet_ported('notifyBulkShift'),
+        'notifyShiftChange' => fn ($b, $a) => fn_not_yet_ported('notifyShiftChange'),
+        'weeklyAreaReport' => fn ($b, $a) => fn_not_yet_ported('weeklyAreaReport'),
+        'archiveOldData' => fn ($b, $a) => fn_not_yet_ported('archiveOldData'),
+        'restoreArchivedData' => fn ($b, $a) => fn_not_yet_ported('restoreArchivedData'),
+        'updateApplicantStatus' => fn ($b, $a) => fn_not_yet_ported('updateApplicantStatus'),
+        'bulkImportEmployees' => fn ($b, $a) => fn_not_yet_ported('bulkImportEmployees'),
+        'requestPasswordReset' => fn ($b, $a) => fn_not_yet_ported('requestPasswordReset'),
+        'requestPasswordChange' => fn ($b, $a) => fn_not_yet_ported('requestPasswordChange'),
+        'approvePasswordRequest' => fn ($b, $a) => fn_not_yet_ported('approvePasswordRequest'),
+        'rejectPasswordRequest' => fn ($b, $a) => fn_not_yet_ported('rejectPasswordRequest'),
+        'getAttendanceButtons' => fn ($b, $a) => fn_not_yet_ported('getAttendanceButtons'),
+        'requestShiftSwapV2' => fn ($b, $a) => fn_not_yet_ported('requestShiftSwapV2'),
+        'confirmShiftSwapStatus' => fn ($b, $a) => fn_not_yet_ported('confirmShiftSwapStatus'),
+    ];
+}
+
+function handle_functions(string $name): void {
+    $table = functions_table();
+    if (!isset($table[$name])) {
+        json_out(['success' => false, 'error' => "Function \"$name\" belum tersedia di server ini"], 404);
+    }
+    $body = get_json_body();
+    $auth = get_auth();
+    try {
+        json_out($table[$name]($body, $auth));
+    } catch (Throwable $e) {
+        json_out(['success' => false, 'error' => APP_DEBUG ? $e->getMessage() : 'Terjadi kesalahan di server'], 500);
+    }
+}

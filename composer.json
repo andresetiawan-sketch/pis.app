@@ -1,0 +1,8 @@
+{
+    "name": "john/htdocs_pis",
+    "require": {
+        "phpoffice/phpword": "^1.4",
+        "phpoffice/phpspreadsheet": "^5.9",
+        "phpmailer/phpmailer": "^7.1"
+    }
+}

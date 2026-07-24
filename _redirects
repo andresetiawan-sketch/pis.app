@@ -1,0 +1,3 @@
+/api/* https://api.pissintegrated.com/api/:splat 200
+/files/* https://api.pissintegrated.com/files/:splat 200
+/branding/* https://api.pissintegrated.com/branding/:splat 200

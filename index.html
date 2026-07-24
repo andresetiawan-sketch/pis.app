@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link id="pis-favicon" rel="icon" type="image/png" href="/branding/favicon" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#7B1A2C" />
+    <title>PIS Integrated System</title>
+    <meta name="description" content="Sistem manajemen terpadu PT. Putra Indonesia Solusi & PT. Prestasi Indonesia Solusi" />
+    <meta property="og:title" content="PIS Integrated System" />
+    <meta property="og:description" content="Sistem manajemen operasional keamanan & facility terpadu" />
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- PENTING: dua script ini HARUS dimuat sebelum bundle module React di bawah,
+         supaya patch cache/dedup pada window.fetch aktif sebelum aplikasi mulai
+         memanggil API (lihat pis-request-cache.js & pis-pwa-install.js). -->
+    <script src="/pis-request-cache.js"></script>
+    <script src="/pis-pwa-install.js"></script>
+
+    <script type="module" crossorigin src="/assets/index-44fd274f-v2.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-eWe__aCi.css">
+    <script type="module">
+if (window.self === window.top) {
+  let lastPath = "";
+  function getPageNameFromPath(path) {
+    const segments = path.split("/").filter(Boolean);
+    return segments[0] || null;
+  }
+  function trackPageView() {
+    const path = window.location.pathname;
+    if (path === lastPath) return;
+    lastPath = path;
+    const pageName = getPageNameFromPath(path) || "home";
+    const appId = "";
+    if (!appId) return;
+    fetch(`/api/app-logs/${appId}/log-user-in-app/${pageName}`, {
+      method: "POST",
+    }).catch(() => {});
+  }
+  const originalPushState = history.pushState.bind(history);
+  history.pushState = function (...args) {
+    originalPushState(...args);
+    trackPageView();
+  };
+  const originalReplaceState = history.replaceState.bind(history);
+  history.replaceState = function (...args) {
+    originalReplaceState(...args);
+    trackPageView();
+  };
+  window.addEventListener("popstate", trackPageView);
+  trackPageView();
+}
+</script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- ===================== PWA install prompt + panel branding admin ===================== -->
+    <!-- Murni HTML/JS terpisah, tidak menyentuh bundle React di atas, jadi tampilan aplikasi tidak berubah -->
+    <style>
+      #pis-brand-card{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;box-sizing:border-box}
+      /* Kartu "Ganti Logo & Favicon" — hanya tampil di halaman Pengaturan (AppSettings), khusus Master Admin */
+      #pis-brand-card{position:fixed;right:20px;bottom:20px;z-index:9997;display:none;width:300px;max-width:calc(100vw - 40px);background:#fff;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.22);padding:18px;border:1px solid #eee}
+      #pis-brand-card.show{display:block}
+      #pis-brand-card h3{margin:0 0 4px;color:#7B1A2C;font-size:15px;display:flex;align-items:center;gap:6px}
+      #pis-brand-card p.hint{margin:0 0 12px;font-size:12px;color:#888}
+      #pis-brand-card label{display:block;font-size:12px;color:#555;margin:10px 0 4px}
+      #pis-brand-card input[type=file],#pis-brand-card input[type=text]{width:100%;font-size:13px;padding:6px;border:1px solid #ddd;border-radius:8px}
+      #pis-brand-card .row{display:flex;gap:8px;margin-top:16px}
+      #pis-brand-card button{flex:1;padding:10px;border-radius:8px;border:none;font-weight:600;cursor:pointer;font-size:13px}
+      #pis-brand-save{background:#7B1A2C;color:#fff}
+      #pis-brand-close{background:#eee;color:#333}
+      /* Panel tambahan halaman Pengaturan — dipasang rapi dalam satu wadah beri judul,
+         berdampingan dalam grid 2 kolom responsif (menggantikan flex-wrap lama yang
+         urutannya tidak konsisten). */
+      #pis-settings-panel-wrap{max-width:820px;margin:28px auto 20px;padding:0 16px;display:none}
+      #pis-settings-panel-wrap.show{display:block}
+      #pis-settings-panel-wrap h2{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;font-weight:700;color:#7B1A2C;margin:0 0 4px;display:flex;align-items:center;gap:6px}
+      #pis-settings-panel-wrap .pis-settings-hint{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:12px;color:#888;margin:0 0 16px}
+      #pis-settings-flex{display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:16px;align-items:start}
+      #pis-settings-flex > *{margin:0 !important;max-width:100% !important;width:100% !important}
+      #pis-brand-card.pis-inline{position:static;box-shadow:0 4px 14px rgba(0,0,0,.1);order:1}
+      #pis-sound-settings{order:2}
+      #pis-emp-area-access-card{order:3}
+      #pis-source-backup-card{order:4}
+    </style>
+
+    <!-- Wadah bersama untuk halaman Pengaturan: Ganti Logo, Bunyi Notifikasi, Akses Data Karyawan, Download Source -->
+    <div id="pis-settings-panel-wrap">
+      <h2>⚙️ Pengaturan Tambahan</h2>
+      <p class="pis-settings-hint">Khusus Master Admin.</p>
+      <div id="pis-settings-flex"></div>
+    </div>
+
+    <!-- Kartu Ganti Logo & Favicon — otomatis dipindahkan ke #pis-settings-flex saat di halaman Pengaturan -->
+    <div id="pis-brand-card">
+      <h3>🖼️ Ganti Logo &amp; Favicon</h3>
+      <p class="hint">Berlaku untuk seluruh aplikasi. Hanya Master Admin yang dapat mengubah.</p>
+      <label>Nama Aplikasi</label>
+      <input type="text" id="pis-brand-name" placeholder="PIS Integrated System" />
+      <label>Logo Aplikasi (PNG/SVG)</label>
+      <input type="file" id="pis-brand-logo" accept="image/*" />
+      <label>Favicon (PNG/ICO, disarankan persegi)</label>
+      <input type="file" id="pis-brand-favicon" accept="image/*" />
+      <div class="row">
+        <button id="pis-brand-close">Tutup</button>
+        <button id="pis-brand-save">Simpan</button>
+      </div>
+    </div>
+
+    <script type="module">
+      // ── 2) Kartu admin: ganti logo & favicon ──
+      // Otomatis tampil hanya ketika berada di halaman Pengaturan (/AppSettings)
+      // dan yang login adalah Master Admin — tidak lagi berupa tombol mengambang
+      // yang muncul di semua halaman.
+      const brandCard = document.getElementById("pis-brand-card");
+      const ADMIN_ROLES = ["Master Admin", "Admin", "admin", "master_admin"];
+
+      function currentEmployee() {
+        try { return JSON.parse(localStorage.getItem("pis_employee") || "null"); } catch { return null; }
+      }
+      function isOnSettingsPage() {
+        return window.location.pathname.replace(/\/+$/, "").toLowerCase() === "/appsettings";
+      }
+      function refreshBrandCard() {
+        const emp = currentEmployee();
+        const shouldShow = isOnSettingsPage() && emp && ADMIN_ROLES.includes(emp.role);
+        brandCard.classList.toggle("show", !!shouldShow);
+      }
+      refreshBrandCard();
+      window.addEventListener("storage", refreshBrandCard);
+      window.addEventListener("popstate", refreshBrandCard);
+      setInterval(refreshBrandCard, 1500); // navigasi SPA (pushState) tidak selalu memicu event storage/popstate
+
+      document.getElementById("pis-brand-close").addEventListener("click", () => { brandCard.classList.remove("show"); });
+
+      document.getElementById("pis-brand-save").addEventListener("click", async () => {
+        const name = document.getElementById("pis-brand-name").value.trim();
+        const logo = document.getElementById("pis-brand-logo").files[0];
+        const favicon = document.getElementById("pis-brand-favicon").files[0];
+        if (!name && !logo && !favicon) return;
+
+        const fd = new FormData();
+        if (name) fd.append("app_name", name);
+        if (logo) fd.append("logo", logo);
+        if (favicon) fd.append("favicon", favicon);
+
+        const token = localStorage.getItem("token");
+        try {
+          const res = await fetch("/api/settings/branding", {
+            method: "POST",
+            headers: token ? { "X-Employee-Token": token } : {},
+            body: fd,
+          });
+          const data = await res.json();
+          if (!data.success) { alert(data.error || "Gagal menyimpan"); return; }
+          // Cache-bust supaya favicon/logo baru langsung terlihat
+          const bust = "?t=" + Date.now();
+          document.getElementById("pis-favicon").href = "/branding/favicon" + bust;
+          document.title = data.app_name || document.title;
+          alert("Berhasil disimpan. Memuat ulang halaman...");
+          location.reload();
+        } catch (e) {
+          alert("Gagal terhubung ke server: " + e.message);
+        }
+      });
+    </script>
+
+    <!-- PIS Chat Widget (Auto-inject) — sekarang termasuk tombol pilihan
+         topik Acha di dalam jendela chat itu sendiri, jadi
+         pis-chat-assistant.js (panel terpisah) tidak dipakai lagi. -->
+    <script src="/pis-chat-widget.js"></script>
+
+    <!-- Rampingkan tampilan otomatis di layar HP (grid 1 kolom, dialog & tabel
+         menyesuaikan lebar layar, cegah scroll horizontal tak sengaja) -->
+    <script src="/pis-mobile-responsive.js"></script>
+
+    <!-- PIS Enhancements: splash animasi, warna tombol, foto profil, status login, tutorial -->
+    <script src="/pis-enhancements.js"></script>
+    <script src="/pis-recruitment-form.js"></script>
+    <!-- pis-chat-assistant.js TIDAK dimuat lagi: tombol topik Acha kini
+         sudah menyatu di dalam pis-chat-widget.js (di dalam jendela chat). -->
+
+    <!-- Keterangan keberhasilan otomatis di semua tombol/menu -->
+    <script src="/pis-global-feedback.js"></script>
+    <!-- Impor Data Pelamar (menu Data Pelamar) -->
+    <script src="/pis-applicant-import.js"></script>
+    <!-- Perbaikan penerimaan pelamar: wajib pilih PT saat Setujui + tampilkan NIK/password asli di Cek Status Lamaran -->
+    <script src="/pis-applicant-approve.js"></script>
+    <!-- Perbaikan tombol Log GPS Lokasi (dari link/widget jadi tombol) -->
+    <script src="/pis-gps-button-fix.js"></script>
+    <!-- Generate PKWT & Surat Tugas otomatis & terhubung (halaman PKWT Karyawan / Surat Tugas / Data Karyawan) -->
+    <script src="/pis-pkwt-generator.js"></script>
+    <!-- Hapus tombol bawaan "Buat PKWT Baru"; pembuatan tetap lewat FAB "Generate PKWT & Surat Tugas" -->
+    <script src="/pis-pkwt-button-replace.js"></script>
+    <!-- Tombol Edit & Hapus permanen (PKWT + Surat Tugas) di kolom Aksi -->
+    <script src="/pis-pkwt-aksi-buttons.js"></script>
+    <!-- Tampilkan PKWT & Surat Tugas (hasil Generate PKWT & Surat Tugas) di kolom Dokumen, saling terhubung -->
+    <script src="/pis-pkwt-dokumen-kolom.js"></script>
+    <!-- Menu "Data Query" (di bawah "Kontrak & Invoice") — skema query_all_area.xlsx, terhubung Data Karyawan via EMPLOYEE NO -->
+    <script src="/pis-data-query.js"></script>
+
+    <!-- Tahap 2: Kontrak Kerja Area/Project — item Jabatan (gaji otomatis dari Data Query) & Barang (harga sewa manual) -->
+    <script src="/pis-area-contract.js"></script>
+    <!-- Tahap 3: Cetak Slip Gaji ke PDF (tombol 🖨️ di tabel Data Query, tampilan mengikuti slip_gaji_template.xlsx) -->
+    <script src="/pis-payslip-pdf.js"></script>
+    <!-- Tahap 4: Rapel — koreksi selisih gaji antar periode, otomatis terdeteksi saat Data Query diubah setelah slip terbit -->
+    <script src="/pis-payroll-rapel.js"></script>
+    <!-- Tahap 5: Rule Potongan Gaji — atur potongan otomatis dari Absensi lewat dashboard tanpa deploy ulang -->
+    <script src="/pis-potongan-absensi.js"></script>
+
+    <!-- Menu "Kelola Regu" — CRUD data Regu (nama, area, pola rotasi ABCD/ABC,
+         durasi shift) + atur anggota per regu. Dimuat SEBELUM pis-fixes.js
+         karena tab "Rotasi Otomatis" di pis-fixes.js memakai data ini
+         (window.PISRegu). -->
+
+
+    <!-- Perbaikan: tombol Generate Jadwal Bulanan yang macet + alat "Kelola Template Patroli"
+         (halaman Template Patroli sebelumnya tidak menampilkan tombol/form input untuk
+         membuat template E-Patrol, sehingga pembuatan template baru selalu gagal / layar
+         terlihat kosong). File ini sudah ada di paket tapi belum pernah dimuat di sini.
+         Sekarang juga berisi tab "Rotasi Otomatis (Semua Regu)" — generate jadwal
+         ABCD/ABC untuk semua Regu di satu Area sekaligus. -->
+    <script src="/pis-fixes.js"></script>
+
+    <!-- Dashboard: kartu Total Karyawan/Regu/Area/Jadwal Aktif + daftar
+         Shift Pagi & Shift Malam hari ini. -->
+    <script src="/pis-shift-rotasi-abc.js"></script>
+
+
+    <!-- Tombol "Pilih Semua" + "Hapus Terpilih" untuk halaman Area/Proyek (Area/Client),
+         supaya beberapa data Area/Proyek bisa dihapus sekaligus tanpa hapus satu-satu. -->
+    <script src="/pis-area-bulk-delete.js"></script>
+
+    <!-- Fix: Radix UI DialogContent aria-describedby warning suppressor -->
+    <script>
+      // Radix UI <DialogContent> menampilkan warning jika tidak ada Description.
+      // Patch ini menekan warning tersebut di console tanpa mengubah bundle JS.
+      (function () {
+        const _warn = console.warn.bind(console);
+        console.warn = function (...args) {
+          const msg = args[0];
+          if (
+            typeof msg === "string" &&
+            (msg.includes("aria-describedby") ||
+              msg.includes("Missing `Description`") ||
+              msg.includes("DialogContent"))
+          ) {
+            return; // tekan warning ini
+          }
+          _warn(...args);
+        };
+      })();
+    </script>
+  </body>
+</html>
