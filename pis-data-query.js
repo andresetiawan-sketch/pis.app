@@ -31,7 +31,7 @@
  * Endpoint backend:
  *  - CRUD  : /api/apps/entities/DataQuery  (mengikuti pola entity lain)
  *  - Lookup: POST /api/apps/functions/getEmployeeByNik { nik }
- *  - Excel : GET  /api/data-query/template
+ *  - Excel : GET  /templates/template_data_query.xlsx
  *            POST /api/data-query/import   { file_url }
  *            GET  /api/data-query/export
  */
