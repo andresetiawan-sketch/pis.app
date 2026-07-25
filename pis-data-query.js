@@ -38,7 +38,7 @@
 (function () {
   "use strict";
 
-  const BASE_URL = "https://pissintegrated.com";
+  const BASE_URL = "https://api.pissintegrated.com";
 
   const ALLOWED_ROLES = ["Master Admin", "Admin"];
 
