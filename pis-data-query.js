@@ -38,6 +38,8 @@
 (function () {
   "use strict";
 
+  const BASE_URL = "https://pissintegrated.com";
+
   const ALLOWED_ROLES = ["Master Admin", "Admin"];
 
   function getEmployee() {
@@ -57,7 +59,7 @@
 
   async function apiList() {
     const token = getToken();
-    const res = await fetch("/api/apps/entities/DataQuery?limit=100000&sort=-created_date", {
+    const res = await fetch(BASE_URL + "/api/apps/entities/DataQuery?limit=100000&sort=-created_date", {
       headers: token ? { "X-Employee-Token": token } : {},
     });
     const data = await res.json().catch(() => []);
@@ -65,7 +67,7 @@
   }
   async function apiCreate(body) {
     const token = getToken();
-    const res = await fetch("/api/apps/entities/DataQuery", {
+    const res = await fetch(BASE_URL + "/api/apps/entities/DataQuery", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(token ? { "X-Employee-Token": token } : {}) },
       body: JSON.stringify(body),
@@ -91,7 +93,7 @@
   }
   async function apiLookupEmployee(nik) {
     const token = getToken();
-    const res = await fetch("/api/apps/functions/getEmployeeByNik", {
+    const res = await fetch(BASE_URL + "/api/apps/functions/getEmployeeByNik", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(token ? { "X-Employee-Token": token } : {}) },
       body: JSON.stringify({ nik }),
@@ -109,7 +111,7 @@
   }
   async function downloadWithAuth(url, filename) {
     const token = getToken();
-    const res = await fetch(url, { headers: token ? { "X-Employee-Token": token } : {} });
+    const res = await fetch(BASE_URL + url, { headers: token ? { "X-Employee-Token": token } : {} });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || `Gagal mengunduh (${res.status})`);
@@ -575,10 +577,10 @@
       const token = getToken();
       const fd = new FormData();
       fd.append("file", file);
-      const upRes = await fetch("/api/uploads", { method: "POST", headers: token ? { "X-Employee-Token": token } : {}, body: fd });
+      const upRes = await fetch(BASE_URL + "/api/uploads", { method: "POST", headers: token ? { "X-Employee-Token": token } : {}, body: fd });
       const upData = await upRes.json();
       if (!upData.file_url) throw new Error("Gagal mengunggah file.");
-      const impRes = await fetch("/api/data-query/import", {
+      const impRes = await fetch(BASE_URL + "/api/data-query/import", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { "X-Employee-Token": token } : {}) },
         body: JSON.stringify({ file_url: upData.file_url, periode: pendingImportPeriode || undefined }),
