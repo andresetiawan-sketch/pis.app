@@ -516,7 +516,7 @@
         refresh();
       }
       else if (act === "template") {
-        try { await downloadWithAuth("/api/data-query/template", "template_data_query.xlsx"); }
+        try { const a = document.createElement("a"); a.href = "/templates/template_data_query.xlsx"; a.download = "template_data_query.xlsx"; document.body.appendChild(a); a.click(); a.remove(); }
         catch (err) { toast(err.message, "fail"); }
       } else if (act === "export") {
         try { await downloadWithAuth("/api/data-query/export", "data_query_export.xlsx"); }
